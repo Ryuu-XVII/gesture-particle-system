@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gesture Particles</title>
+  <link rel="stylesheet" href="style.css" />
+  <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/+esm",
+          "@tensorflow/tfjs": "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/+esm",
+          "@tensorflow/tfjs-backend-webgpu": "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgpu@4.10.0/+esm"
+        }
+      }
+    </script>
+</head>
+
+<body>
+  <!-- Hidden Video Element for MediaPipe -->
+  <video id="webcam" style="position: absolute; opacity: 0; pointer-events: none" autoplay playsinline></video>
+
+  <!-- UI Overlay -->
+  <div id="ui-container">
+    <div id="header">
+      <h1>Gesture Particles</h1>
+      <p>Control the magic with your hands</p>
+    </div>
+
+    <div id="status-panel">
+      <div class="status-item">
+        <span class="label">Status:</span>
+        <span id="status-text">Initializing...</span>
+      </div>
+      <div class="status-item">
+        <span class="label">FPS:</span>
+        <span id="fps-counter">0</span>
+      </div>
+      <div class="status-item">
+        <span class="label">Backend:</span>
+        <span id="backend-display" style="color: var(--accent);">Init...</span>
+      </div>
+      <div class="status-item">
+        <span class="label">Gesture:</span>
+        <span id="gesture-display" style="color: #fff; font-weight: bold;">-</span>
+      </div>
+    </div>
+
+    <div id="controls-panel">
+      <div class="control-group">
+        <h3>Shape</h3>
+        <div class="button-grid">
+          <button class="shape-btn active" data-shape="heart">Heart</button>
+          <button class="shape-btn" data-shape="star">Star</button>
+          <button class="shape-btn" data-shape="fireworks">fireworks</button>
+          <button class="shape-btn" data-shape="flower">Flower</button>
+          <button class="shape-btn" data-shape="saturn">Saturn</button>
+          <button class="shape-btn" data-shape="reality"
+            style="border-color: var(--accent); color: var(--accent);">Reality AI</button>
+          <button class="btn" id="btn-mic" style="background: rgba(255,0,0,0.2);">🎙️ Voice Off</button>
+        </div>
+      </div>
+
+      <div class="control-group">
+        <h3>Color</h3>
+        <div class="color-picker-wrapper">
+          <input type="color" id="particle-color" value="#00ffff" />
+          <label for="particle-color">Pick Color</label>
+        </div>
+      </div>
+    </div>
+
+    <div id="instructions-panel">
+      <h3>Gestures</h3>
+      <ul>
+        <li><strong>☝️ Point</strong>: Move Particles</li>
+        <li><strong>✌️ Peace</strong>: Disco Mode</li>
+        <li><strong>🖐️ Spread Hand</strong>: Expand Particles</li>
+        <li><strong>✊ Fist</strong>: Collapse Particles</li>
+
+      </ul>
+    </div>
+  </div>
+
+  <!-- Main Entry Point -->
+  <script type="module" src="./src/main.js"></script>
+</body>
+
+</html>
