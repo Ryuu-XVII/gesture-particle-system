@@ -7,12 +7,17 @@ export class RealityService {
         this.cache = new Map();
         this.generatedPoints = new Float32Array(PARTICLE_COUNT * 3);
         this.time = 0;
+        this.highEnergy = false;
     }
 
     generate(motionData, deltaSeconds = 1 / 60) {
         const shapeModes = { HEART_HANDS: 'HEART', STAR_HANDS: 'STAR', FLOWER_HANDS: 'FLOWER' };
-        const mode = shapeModes[motionData?.shape] ?? (motionData?.energy > 0.8 ? 'CHAOS' : 'FLUID');
-        this.time += deltaSeconds;
+        const energy = Math.min(1, Math.max(0, motionData?.energy ?? 0));
+        // Separate entry/exit thresholds keep noisy motion from flickering modes.
+        if (energy > 0.8) this.highEnergy = true;
+        else if (energy < 0.55) this.highEnergy = false;
+        const mode = shapeModes[motionData?.shape] ?? (this.highEnergy ? 'CHAOS' : 'FLUID');
+        this.time += deltaSeconds * (0.6 + energy * 1.4);
         this.currentMode = mode;
         if (!this.cache.has(mode)) {
             const buffer = new Float32Array(PARTICLE_COUNT * 3);
@@ -30,7 +35,7 @@ export class RealityService {
         }
         const base = this.cache.get(mode);
         if (mode === 'FLUID' || mode === 'CHAOS') {
-            const amplitude = mode === 'CHAOS' ? 8 : 2;
+            const amplitude = mode === 'CHAOS' ? 4 + energy * 6 : 1 + energy * 3;
             const speed = mode === 'CHAOS' ? 5 : 1;
             for (let i = 0; i < base.length; i += 3) {
                 const phase = this.time * speed + base[i] * 0.1;

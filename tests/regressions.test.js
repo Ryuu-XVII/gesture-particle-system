@@ -3,15 +3,19 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { AIService } from '../src/ai-service.js';
 import { MotionAnalyzer } from '../src/motion-analyzer.js';
+import * as geometry from '../src/hand-geometry.js';
+import { PoseFilter } from '../src/pose-filter.js';
+import { makeHand, transformHand } from './helpers/hand-fixtures.js';
 
 // Inject hardware adapters while exercising the actual source methods.
 function loadClass(file, name, dependencies = {}) {
     let source = readFileSync(new URL(`../src/${file}`, import.meta.url), 'utf8')
         .replace(/^import .*;\r?\n/gm, '').replace(/export class /g, 'class ');
     if (name === 'App') source = source.replace(/window.addEventListener\('DOMContentLoaded'.*\);/, '');
+    dependencies = { ...geometry, PoseFilter, ...dependencies };
     return new Function(...Object.keys(dependencies), `${source}\nreturn ${name};`)(...Object.values(dependencies));
 }
-const hand = x => Array.from({ length: 21 }, () => ({ x, y: 0, z: 0 }));
+const hand = x => transformHand(makeHand(), { scale: 0.1, x, y: 0.2 });
 
 test('all reference poses match exactly, including Peace', () => {
     const ai = new AIService();
@@ -24,13 +28,10 @@ test('all reference poses match exactly, including Peace', () => {
     assert.equal(ai.classify([]), null);
 });
 
-test('landmark geometry generates the expected binary finger features', () => {
+test('landmark angles recognize the four intended poses', () => {
     const ai = new AIService();
     for (const [expected, features] of Object.entries(ai.referenceGestures)) {
-        const points = hand(0);
-        [2, 5, 9, 13, 17].forEach(i => { points[i].x = 0.1; });
-        [4, 8, 12, 16, 20].forEach((i, f) => { points[i].x = features[f] ? 0.2 : 0.05; });
-        assert.equal(ai.classify(points), expected);
+        assert.equal(ai.classify(makeHand(features)), expected);
     }
 });
 
@@ -75,7 +76,7 @@ test('duplicate video frames do not run detection, classification, or motion ana
     vision.detect(10);
     vision.detect(20);
     assert.equal(calls, 1);
-    assert.equal(vision.motionAnalyzer.history.length, 1);
+    assert.equal(vision.motionAnalyzer.previous.time, 10);
     video.currentTime = 2;
     vision.detect(30);
     assert.equal(calls, 2);
@@ -88,7 +89,7 @@ test('losing a hand resets collapse and pointer history', () => {
     vision.processGestures([], 100);
     assert.equal(vision.gestureData.expansionFactor, 1);
     assert.equal(vision.gestureData.gesture, null);
-    assert.equal(vision.aiService.history.length, 0);
+    assert.equal(vision.aiService.pointer, null);
 });
 
 test('GPU initialization falls back to CPU and camera denial propagates', async () => {
@@ -236,4 +237,194 @@ test('particle interpolation has the same result over equal time at 30 and 60 FP
     }
     const a = run(30), b = run(60);
     a.forEach((value, i) => assert.ok(Math.abs(value - b[i]) < 1e-6));
+});
+
+test('pose matching tolerates scale, roll, yaw and mirrored hands', () => {
+    const ai = new AIService();
+    for (const [name, features] of Object.entries(ai.referenceGestures)) {
+        for (const scale of [0.025, 0.1, 0.3]) {
+            for (const mirror of [-1, 1]) {
+                const points = transformHand(makeHand(features), { scale, mirror, roll: 1.2, yaw: 0.65, x: 0.5, y: 0.6 });
+                assert.equal(ai.classify(points), name, `${name} at scale ${scale}, mirror ${mirror}`);
+            }
+        }
+    }
+});
+
+test('invalid and degenerate landmarks do not issue commands', () => {
+    const ai = new AIService();
+    const bad = makeHand();
+    bad[8].x = NaN;
+    assert.equal(ai.classify(bad), null);
+    assert.equal(ai.classify(Array.from({length:21},()=>({x:0,y:0,z:0}))), null);
+    const analyzer = new MotionAnalyzer();
+    assert.equal(analyzer.analyze([bad], 0).shape, null);
+});
+
+test('gesture confirmation is time-based and resists isolated misdetections', () => {
+    const ai = new AIService();
+    const peace = makeHand(ai.referenceGestures.Peace);
+    const point = makeHand(ai.referenceGestures.Point);
+    assert.equal(ai.update(peace, 0).gesture, null);
+    assert.equal(ai.update(peace, 50).gesture, null);
+    assert.equal(ai.update(peace, 100).gesture, 'Peace');
+    assert.equal(ai.update(point, 130).gesture, 'Peace');
+    assert.equal(ai.update(peace, 160).gesture, 'Peace');
+    ai.update(point, 190);
+    assert.equal(ai.update(point, 290).gesture, 'Point');
+    assert.equal(ai.update(peace, 600).gesture, null); // Long gaps need confirmation again.
+});
+
+test('sustained ambiguity releases a confirmed pose', () => {
+    const filter = new PoseFilter();
+    filter.update('Peace', 0);
+    assert.equal(filter.update('Peace', 100), 'Peace');
+    assert.equal(filter.update(null, 130), 'Peace');
+    assert.equal(filter.update(null, 240), 'Peace');
+    assert.equal(filter.update(null, 260), null);
+});
+
+test('curling produces intermediate openness rather than a binary jump', () => {
+    const ai = new AIService();
+    const open = makeHand();
+    const closed = makeHand([0,0,0,0,0]);
+    const midway = open.map((point,i) => ({
+        x:(point.x+closed[i].x)/2, y:(point.y+closed[i].y)/2, z:(point.z+closed[i].z)/2
+    }));
+    const openness = ai.classifyDetailed(midway).openness;
+    assert.ok(openness > 0.15 && openness < 0.85, `openness ${openness}`);
+    assert.ok(ai.classifyDetailed(open).openness > openness);
+    assert.ok(ai.classifyDetailed(closed).openness < openness);
+});
+
+test('pointer smoothing is time-based and follows deliberate movement', () => {
+    const ai = new AIService();
+    assert.deepEqual(ai.predictMotion({x:0,y:0},0), {x:0,y:0});
+    const first = ai.predictMotion({x:0.3,y:0.3},30);
+    assert.ok(first.x > 0 && first.x < 0.3);
+    const settled = ai.predictMotion({x:0.3,y:0.3},60);
+    assert.ok(settled.x > first.x && settled.x < 0.3);
+    // A resumed stream must not interpolate from a stale pointer.
+    assert.deepEqual(ai.predictMotion({x:0.8,y:0.9},1000), {x:0.8,y:0.9});
+});
+
+test('two-hand order swaps do not create false motion energy', () => {
+    const analyzer = new MotionAnalyzer();
+    const a = transformHand(makeHand(), {scale:0.1,x:0.2,y:0.3});
+    const b = transformHand(makeHand(), {scale:0.1,x:0.7,y:0.3});
+    analyzer.analyze([a,b], 0);
+    const motion = analyzer.analyze([b,a], 33);
+    assert.equal(motion.speed, 0);
+    assert.equal(motion.energy, 0);
+});
+
+test('motion speed scales with palm size rather than camera distance', () => {
+    function run(scale) {
+        const analyzer = new MotionAnalyzer();
+        analyzer.analyze([transformHand(makeHand(),{scale})],0);
+        return analyzer.analyze([transformHand(makeHand(),{scale,x:scale * 0.2})],100).speed;
+    }
+    assert.ok(Math.abs(run(0.05) - run(0.2)) < 1e-10);
+});
+
+function starHands(scale = 0.1) {
+    const left = transformHand(makeHand(), {scale,x:0.3,y:0.3});
+    const right = transformHand(makeHand(), {scale,x:0.3+scale*2,y:0.3});
+    right[8] = {...left[8], x:left[8].x + scale*0.1};
+    return [left,right];
+}
+
+test('two-hand contact thresholds scale with hands and require a held pose', () => {
+    for (const scale of [0.025, 0.1, 0.2]) {
+        const analyzer = new MotionAnalyzer();
+        const hands = starHands(scale);
+        assert.equal(analyzer.analyze(hands,0).shape, null);
+        assert.equal(analyzer.analyze(hands,60).shape, null);
+        assert.equal(analyzer.analyze(hands,130).shape, 'STAR_HANDS');
+    }
+});
+
+test('a stationary primary hand stays in control when detection order changes', () => {
+    const { vision } = makeVision();
+    const left = transformHand(makeHand([0,1,0,0,0]),{scale:0.1,x:0.2,y:0.3});
+    const right = transformHand(makeHand(),{scale:0.1,x:0.7,y:0.3});
+    vision.processGestures([left,right],0);
+    vision.processGestures([left,right],100);
+    const pointer = {...vision.gestureData.pointer};
+    vision.processGestures([right,left],133);
+    assert.deepEqual(vision.gestureData.pointer,pointer);
+    assert.equal(vision.gestureData.gesture,'Point');
+});
+
+test('world landmarks drive pose classification while image landmarks drive pointing', () => {
+    const { vision } = makeVision();
+    const image = transformHand(makeHand(),{scale:0.1,x:0.4,y:0.2});
+    const world = makeHand([0,1,1,0,0]);
+    vision.processGestures([image],0,[world]);
+    vision.processGestures([image],100,[world]);
+    assert.equal(vision.gestureData.gesture,'Peace');
+    assert.deepEqual(vision.gestureData.pointer, {x:image[8].x,y:image[8].y});
+});
+
+test('camera-frame stalls release stale commands', () => {
+    const { vision } = makeVision();
+    vision.isReady = true;
+    vision.handLandmarker = {detectForVideo:()=>({landmarks:[hand(0)]})};
+    vision.detect(10);
+    vision.gestureData.gesture = 'Point';
+    vision.detect(400); // Same video frame; no fresh tracking data.
+    assert.equal(vision.gestureData.gesture,null);
+    assert.equal(vision.gestureData.handCount,0);
+});
+
+test('Motion mode uses separate entry/exit thresholds to avoid flicker', () => {
+    const Reality = loadClass('reality-service.js','RealityService',generators);
+    const reality = new Reality();
+    reality.generate({energy:0.81});
+    assert.equal(reality.currentMode,'CHAOS');
+    reality.generate({energy:0.7});
+    assert.equal(reality.currentMode,'CHAOS');
+    reality.generate({energy:0.5});
+    assert.equal(reality.currentMode,'FLUID');
+    reality.generate({energy:0.7});
+    assert.equal(reality.currentMode,'FLUID');
+});
+
+test('heart topology follows palm direction rather than screen-up', () => {
+    const a = makeHand(), b = transformHand(makeHand(),{x:2});
+    a[4] = {x:0.95,y:1.4,z:0}; b[4] = {x:1.05,y:1.4,z:0};
+    a[8] = {x:0.95,y:2,z:0}; b[8] = {x:1.05,y:2,z:0};
+    for (const roll of [0, Math.PI/2, Math.PI]) {
+        const hands = [a,b].map(hand => transformHand(hand,{scale:0.1,roll}));
+        assert.equal(new MotionAnalyzer().detectShape(hands),'HEART_HANDS');
+    }
+});
+
+test('flower needs open hands rather than only close wrists', () => {
+    const open = [
+        transformHand(makeHand(),{scale:0.1,roll:1.2}),
+        transformHand(makeHand(),{scale:0.1,roll:-1.2,x:0.04})
+    ];
+    const analyzer = new MotionAnalyzer();
+    assert.equal(analyzer.detectShape(open),'FLOWER_HANDS');
+    const closed = [
+        transformHand(makeHand([0,0,0,0,0]),{scale:0.1,roll:1.2}),
+        transformHand(makeHand([0,0,0,0,0]),{scale:0.1,roll:-1.2,x:0.04})
+    ];
+    assert.notEqual(analyzer.detectShape(closed),'FLOWER_HANDS');
+});
+
+test('vision uses continuous curl expansion while pointing preserves size', () => {
+    const { vision } = makeVision();
+    const closed = transformHand(makeHand([0,0,0,0,0]),{scale:0.1});
+    const open = transformHand(makeHand(),{scale:0.1});
+    const halfway = open.map((point,i)=>({x:(point.x+closed[i].x)/2,y:(point.y+closed[i].y)/2,z:(point.z+closed[i].z)/2}));
+    vision.processGestures([halfway],0);
+    const size = vision.gestureData.expansionFactor;
+    assert.ok(size > 0.15 && size < 0.85);
+    const point = transformHand(makeHand([0,1,0,0,0]),{scale:0.1});
+    vision.processGestures([point],100);
+    vision.processGestures([point],200);
+    assert.equal(vision.gestureData.gesture,'Point');
+    assert.equal(vision.gestureData.expansionFactor,size);
 });

@@ -91,7 +91,7 @@ class App {
         const points = this.sceneManager.currentShape === 'reality'
             ? this.realityService.scan(gestures.motion, deltaSeconds) : null;
         this.sceneManager.update(gestures, points, deltaSeconds);
-        this.uiManager.updateGesture(gestures.gesture);
+        this.uiManager.updateGesture(gestures);
     }
 
     dispose() {

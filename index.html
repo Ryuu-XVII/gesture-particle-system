@@ -24,7 +24,7 @@
   <div id="ui-container">
     <div id="header">
       <h1>Gesture Particles</h1>
-      <p>Control the magic with your hands</p>
+      <p id="tracking-hint">Show a hand to control particles. Shape buttons always work.</p>
     </div>
 
     <div id="status-panel">
@@ -42,7 +42,7 @@
       </div>
       <div class="status-item">
         <span class="label">Gesture:</span>
-        <span id="gesture-display" style="color: #fff; font-weight: bold;">-</span>
+        <span id="gesture-display" title="Similarity to gesture rules, not a calibrated probability" style="color: #fff; font-weight: bold;">-</span>
       </div>
     </div>
 
@@ -75,8 +75,8 @@
       <ul>
         <li><strong>☝️ Point</strong>: Move Particles</li>
         <li><strong>✌️ Peace</strong>: Disco Mode</li>
-        <li><strong>🖐️ Spread Hand</strong>: Expand Particles</li>
-        <li><strong>✊ Fist</strong>: Collapse Particles</li>
+        <li><strong>🖐️ Curl / Open</strong>: Smoothly resize</li>
+        <li><strong>✊ Hold a pose</strong>: Confirm gesture</li>
         <li>Motion Mode: touch index tips for a star, thumbs + index tips for a heart, or wrists for a flower.</li>
 
       </ul>
