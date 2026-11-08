@@ -3,7 +3,6 @@ import { getHeartPoints, getStarPoints, getFireworksPoints, getFlowerPoints, get
 
 export class SceneManager {
     constructor() {
-        this.canvas = document.querySelector('canvas');
         this.width = window.innerWidth;
         this.height = window.innerHeight;
 
@@ -12,16 +11,16 @@ export class SceneManager {
         // Camera
         this.camera = new THREE.PerspectiveCamera(75, this.width / this.height, 0.1, 1000);
         this.camera.position.z = 30;
-        this.targetZ = 30; // for zoom lerping
 
         // Renderer
         this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
         this.renderer.setSize(this.width, this.height);
-        this.renderer.setPixelRatio(window.devicePixelRatio);
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
         document.body.appendChild(this.renderer.domElement);
 
         // Resize handler
-        window.addEventListener('resize', this.onWindowResize.bind(this));
+        this.resizeHandler = this.onWindowResize.bind(this);
+        window.addEventListener('resize', this.resizeHandler);
 
         // Particle System
         this.particles = null;
@@ -36,12 +35,7 @@ export class SceneManager {
         // Gesture State
         this.expansion = 1.0;
         this.targetExpansion = 1.0;
-        this.rotationX = 0;
-        this.rotationY = 0;
-        this.rotationZ = 0;
-        this.targetRotationX = 0;
-        this.targetRotationY = 0;
-        this.targetRotationZ = 0;
+
 
         this.initParticles();
     }
@@ -58,12 +52,20 @@ export class SceneManager {
         this.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
 
         // Material
-        const sprite = new THREE.TextureLoader().load('https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/sprites/disc.png');
+        // Generate the sprite locally so a remote texture failure cannot hide particles.
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 32;
+        const context = canvas.getContext('2d');
+        context.fillStyle = 'white';
+        context.beginPath();
+        context.arc(16, 16, 15, 0, Math.PI * 2);
+        context.fill();
+        this.sprite = new THREE.CanvasTexture(canvas);
 
         this.material = new THREE.PointsMaterial({
             color: this.baseColor,
             size: 0.5,
-            map: sprite,
+            map: this.sprite,
             sizeAttenuation: true,
             alphaTest: 0.5,
             transparent: true,
@@ -88,8 +90,7 @@ export class SceneManager {
             case 'flower': points = getFlowerPoints(); break;
             case 'saturn': points = getSaturnPoints(); break;
             case 'reality':
-                // Reality mode handled dynamically in update()
-                // We set a marker here
+                // Motion targets are supplied dynamically each frame.
                 this.targetPositions = []; // Will be filled per frame
                 break;
             default: points = getHeartPoints();
@@ -115,31 +116,32 @@ export class SceneManager {
     }
 
     // Helper: Lerp vector3 towards target
-    lerpParticles(realityPoints = null) {
+    lerpParticles(realityPoints = null, deltaSeconds = 1 / 60) {
         const positions = this.geometry.attributes.position.array;
 
-        // If Reality Mode (AI Director)
+        // Procedural motion targets use the same expansion as static shapes.
         if (this.currentShape === 'reality' && realityPoints && realityPoints.length > 0) {
-            // Dynamic Lerp Factor based on "Energy" ? 
-            // For now use constant, or we could pass energy in.
-            const lerpFactor = 0.08;
+            const lerpFactor = 1 - Math.pow(1 - 0.08, deltaSeconds * 60);
 
+            const flat = realityPoints instanceof Float32Array;
             for (let i = 0; i < PARTICLE_COUNT; i++) {
                 const ix = i * 3;
-                // Loop if fewer points
-                const pt = realityPoints[i % realityPoints.length];
+                const pt = flat ? null : realityPoints[i % realityPoints.length];
+                const x = flat ? realityPoints[ix] : pt.x;
+                const y = flat ? realityPoints[ix + 1] : pt.y;
+                const z = flat ? realityPoints[ix + 2] : pt.z;
 
                 // Lerp
-                positions[ix] += (pt.x - positions[ix]) * lerpFactor;
-                positions[ix + 1] += (pt.y - positions[ix + 1]) * lerpFactor;
-                positions[ix + 2] += (pt.z - positions[ix + 2]) * lerpFactor;
+                positions[ix] += (x * this.expansion - positions[ix]) * lerpFactor;
+                positions[ix + 1] += (y * this.expansion - positions[ix + 1]) * lerpFactor;
+                positions[ix + 2] += (z * this.expansion - positions[ix + 2]) * lerpFactor;
             }
             this.geometry.attributes.position.needsUpdate = true;
             return;
         }
 
         // Normal Shape Mode
-        const lerpFactor = 0.05; // speed of shape transition
+        const lerpFactor = 1 - Math.pow(1 - 0.05, deltaSeconds * 60);
         for (let i = 0; i < PARTICLE_COUNT; i++) {
             const target = this.targetPositions[i];
             if (!target) continue;
@@ -172,7 +174,18 @@ export class SceneManager {
         this.geometry.attributes.position.needsUpdate = true;
     }
 
-    update(gestureData, realityPoints = null) {
+    dispose() {
+        window.removeEventListener('resize', this.resizeHandler);
+        this.geometry.dispose();
+        this.material.dispose();
+        this.sprite.dispose();
+        this.renderer.dispose();
+        this.renderer.domElement.remove();
+    }
+
+    update(gestureData, realityPoints = null, deltaSeconds = 1 / 60) {
+        const moveAlpha = 1 - Math.pow(0.95, deltaSeconds * 60);
+        const expansionAlpha = 1 - Math.pow(0.9, deltaSeconds * 60);
         // 1. Process Gesture Data
         if (gestureData) {
             // Expansion (Mapped from Fist/Five)
@@ -186,36 +199,34 @@ export class SceneManager {
             // Special Gestures
             if (gestureData.gesture === 'Peace') {
                 // Randomize color occasionally
-                if (Math.random() < 0.05) {
+                if (Math.random() < moveAlpha) {
                     this.particles.material.color.setHSL(Math.random(), 1, 0.5);
                 }
             }
 
             if (gestureData.gesture === 'Point' && gestureData.pointer) {
-                // Gravity Well at pointer
                 // Map 0..1 x/y to -20..20 world coords approx
                 const px = (gestureData.pointer.x - 0.5) * -40; // Invert X
                 const py = (gestureData.pointer.y - 0.5) * -30; // Invert Y
 
-                // This would require updating every particle speed towards this point
-                // For now, let's just make the whole system drift towards it or distort
-                this.particles.position.x += (px - this.particles.position.x) * 0.05;
-                this.particles.position.y += (py - this.particles.position.y) * 0.05;
+                // Smoothly move the system toward the pointing finger.
+                this.particles.position.x += (px - this.particles.position.x) * moveAlpha;
+                this.particles.position.y += (py - this.particles.position.y) * moveAlpha;
             } else {
                 // Reset position
-                this.particles.position.x *= 0.95;
-                this.particles.position.y *= 0.95;
+                this.particles.position.x *= 1 - moveAlpha;
+                this.particles.position.y *= 1 - moveAlpha;
             }
         }
 
         // Auto Rotation (Slow)
-        this.particles.rotation.y += 0.002;
+        this.particles.rotation.y += 0.12 * deltaSeconds;
 
         // Smooth Interpolation for Expansion
-        this.expansion += (this.targetExpansion - this.expansion) * 0.1;
+        this.expansion += (this.targetExpansion - this.expansion) * expansionAlpha;
 
         // Interpolate individual particles
-        this.lerpParticles(realityPoints);
+        this.lerpParticles(realityPoints, deltaSeconds);
 
         // Render
         this.renderer.render(this.scene, this.camera);

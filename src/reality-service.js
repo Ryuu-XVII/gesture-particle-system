@@ -1,87 +1,55 @@
-import * as THREE from 'three';
-import { getHeartPoints, getStarPoints, getFireworksPoints, getFlowerPoints, PARTICLE_COUNT } from './particles.js';
+import { getHeartPoints, getStarPoints, getFlowerPoints, PARTICLE_COUNT } from './particles.js';
 
-// Reusing this file/class name to avoid breaking imports, but logic is all new.
+// Procedural motion effects driven by MediaPipe landmarks.
 export class RealityService {
     constructor() {
-        this.currentMode = 'neutral';
-        this.generatedPoints = null;
+        this.currentMode = null;
+        this.cache = new Map();
+        this.generatedPoints = new Float32Array(PARTICLE_COUNT * 3);
+        this.time = 0;
+        this.highEnergy = false;
     }
 
-    // "Scan" is now "Generate based on Motion"
-    // Returns array of Vector3 OR null (if we should just use standard physics)
-    // Actually, SceneManager expects a list of points to Lerp to.
-    generate(motionData) {
-        if (!motionData) return [];
-
-        const points = [];
-
-        // 1. Shape Override (Highest Priority)
-        // HEART HANDS
-        if (motionData.shape === 'HEART_HANDS') {
-            if (this.currentMode !== 'HEART') {
-                this.generatedPoints = getHeartPoints(PARTICLE_COUNT);
-                this.currentMode = 'HEART';
+    generate(motionData, deltaSeconds = 1 / 60) {
+        const shapeModes = { HEART_HANDS: 'HEART', STAR_HANDS: 'STAR', FLOWER_HANDS: 'FLOWER' };
+        const energy = Math.min(1, Math.max(0, motionData?.energy ?? 0));
+        // Separate entry/exit thresholds keep noisy motion from flickering modes.
+        if (energy > 0.8) this.highEnergy = true;
+        else if (energy < 0.55) this.highEnergy = false;
+        const mode = shapeModes[motionData?.shape] ?? (this.highEnergy ? 'CHAOS' : 'FLUID');
+        this.time += deltaSeconds * (0.6 + energy * 1.4);
+        this.currentMode = mode;
+        if (!this.cache.has(mode)) {
+            const buffer = new Float32Array(PARTICLE_COUNT * 3);
+            const generator = { HEART: getHeartPoints, STAR: getStarPoints, FLOWER: getFlowerPoints }[mode];
+            if (generator) {
+                generator().forEach((point, i) => buffer.set([point.x, point.y, point.z], i * 3));
+            } else {
+                for (let i = 0; i < buffer.length; i += 3) {
+                    buffer[i] = (Math.random() - 0.5) * (mode === 'CHAOS' ? 100 : 60);
+                    buffer[i + 1] = (Math.random() - 0.5) * (mode === 'CHAOS' ? 80 : 60);
+                    buffer[i + 2] = (Math.random() - 0.5) * (mode === 'CHAOS' ? 50 : 20);
+                }
             }
-            return this.generatedPoints;
+            this.cache.set(mode, buffer);
         }
-
-        // STAR HANDS (E.T. Touch)
-        if (motionData.shape === 'STAR_HANDS') {
-            if (this.currentMode !== 'STAR') {
-                this.generatedPoints = getStarPoints(PARTICLE_COUNT);
-                this.currentMode = 'STAR';
+        const base = this.cache.get(mode);
+        if (mode === 'FLUID' || mode === 'CHAOS') {
+            const amplitude = mode === 'CHAOS' ? 4 + energy * 6 : 1 + energy * 3;
+            const speed = mode === 'CHAOS' ? 5 : 1;
+            for (let i = 0; i < base.length; i += 3) {
+                const phase = this.time * speed + base[i] * 0.1;
+                this.generatedPoints[i] = base[i] + Math.sin(phase) * amplitude;
+                this.generatedPoints[i + 1] = base[i + 1] + Math.cos(phase) * amplitude;
+                this.generatedPoints[i + 2] = base[i + 2] + Math.sin(phase * 0.7) * amplitude;
             }
-            return this.generatedPoints;
+        } else {
+            this.generatedPoints.set(base);
         }
-
-        // FLOWER HANDS (Wrists Touch)
-        if (motionData.shape === 'FLOWER_HANDS') {
-            if (this.currentMode !== 'FLOWER') {
-                this.generatedPoints = getFlowerPoints(PARTICLE_COUNT);
-                this.currentMode = 'FLOWER';
-            }
-            return this.generatedPoints;
-        }
-
-        // 2. High Energy (Explosion/Spark)
-        // If moving very fast
-        if (motionData.energy > 0.8) {
-            // Generate random chaotic points
-            // "Explosive" flow
-            const count = PARTICLE_COUNT;
-            for (let i = 0; i < count; i++) {
-                // Random scatter
-                const x = (Math.random() - 0.5) * 100;
-                const y = (Math.random() - 0.5) * 80;
-                const z = (Math.random() - 0.5) * 50;
-                points.push({ x, y, z });
-            }
-            this.currentMode = 'CHAOS';
-            return points;
-        }
-
-        // 3. Fluid Flow (Low Energy)
-        // Generate a flowing wave or nebula
-        if (this.currentMode !== 'FLUID') {
-            // We can return a specific shape, or just "null" to let SceneManager handle safe defaults?
-            // Let's generate a "Cloud" shape
-            const count = PARTICLE_COUNT;
-            for (let i = 0; i < count; i++) {
-                const x = (Math.random() - 0.5) * 60;
-                const y = (Math.random() - 0.5) * 60;
-                const z = (Math.random() - 0.5) * 20;
-                points.push({ x, y, z });
-            }
-            this.generatedPoints = points;
-            this.currentMode = 'FLUID';
-        }
-
         return this.generatedPoints;
     }
 
-    // Alias for compatibility if main.js calls scan()
-    scan(motionData) {
-        return this.generate(motionData);
+    scan(motionData, deltaSeconds) {
+        return this.generate(motionData, deltaSeconds);
     }
 }

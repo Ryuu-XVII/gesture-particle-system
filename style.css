@@ -200,3 +200,26 @@ input[type="color"]::-webkit-color-swatch {
 #instructions-panel li strong {
     color: var(--text-main);
 }
+/* Keep the overlay usable on phones, tablets, and short windows. */
+#ui-container { position: fixed; z-index: 1; }
+#header { max-width: min(40vw, 340px); }
+#status-panel { flex-wrap: wrap; justify-content: flex-end; max-width: 50vw; }
+#controls-panel { width: min(860px, calc(100vw - 48px)); box-sizing: border-box; flex-wrap: wrap; }
+.control-group { min-width: 0; }
+.button-grid { flex-wrap: wrap; }
+#instructions-panel { bottom: 150px; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+button:disabled { opacity: 0.5; cursor: default; }
+@media (max-width: 700px) {
+    #header { top: 12px; left: 12px; max-width: calc(100vw - 24px); }
+    #header h1 { font-size: 1.2rem; }
+    #status-panel { top: 76px; left: 12px; right: 12px; max-width: none; justify-content: flex-start; gap: 8px; }
+    #controls-panel { bottom: 12px; width: calc(100vw - 24px); padding: 12px; gap: 10px; max-height: 38vh; overflow-y: auto; }
+    #instructions-panel { display: none; }
+    .shape-btn { padding: 10px; }
+}
+@media (max-height: 600px) {
+    #instructions-panel { display: none; }
+}
+
+.status-item { max-width: 100%; overflow-wrap: anywhere; }

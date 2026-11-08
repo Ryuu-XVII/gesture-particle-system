@@ -1,4 +1,3 @@
-
 import { SceneManager } from './scene.js';
 import { VisionManager } from './vision.js';
 import { RealityService } from './reality-service.js';
@@ -9,98 +8,100 @@ class App {
     constructor() {
         this.sceneManager = new SceneManager();
         this.visionManager = new VisionManager();
-        // Link video from VisionManager (shared element)
         this.realityService = new RealityService();
-
-        this.uiManager = new UIManager(this.sceneManager); // Pass sceneManager to UI
+        this.uiManager = new UIManager(this.sceneManager);
         this.voiceService = new VoiceService();
-
-        this.setupVoiceControl();
-
-        this.lastTime = 0;
+        this.lastTime = null;
         this.frameCount = 0;
-        this.lastFpsTime = 0;
-
+        this.lastFpsTime = null;
+        this.disposed = false;
+        this.animate = this.animate.bind(this);
+        this.setupVoiceControl();
+        window.addEventListener('pagehide', () => this.dispose(), { once: true });
+        // Rendering and manual controls work while camera permission is pending.
+        this.animationId = requestAnimationFrame(this.animate);
         this.init();
     }
 
     setupVoiceControl() {
-        const btnMic = document.getElementById('btn-mic');
-        if (!btnMic) return;
-
-        btnMic.addEventListener('click', () => {
-            if (this.voiceService.isListening) {
+        const button = document.getElementById('btn-mic');
+        if (!this.voiceService.recognition) {
+            button.disabled = true;
+            button.textContent = 'Voice unavailable';
+            return;
+        }
+        button.addEventListener('click', () => {
+            if (this.voiceService.shouldListen) {
                 this.voiceService.stop();
-                btnMic.textContent = "🎙️ Voice Off";
-                btnMic.style.background = "rgba(255,0,0,0.2)";
-                btnMic.classList.remove('active');
-            } else {
-                this.voiceService.start(
-                    (shape) => {
-                        console.log("Voice Command Executed:", shape);
-                        this.sceneManager.setShape(shape);
-                        this.uiManager.setStatus(`Voice: ${shape.toUpperCase()} `);
-
-                        // Update UI activeness
-                        document.querySelectorAll('.shape-btn').forEach(b => b.classList.remove('active'));
-                        const matches = document.querySelectorAll(`[data-shape="${shape}"]`);
-                        if (matches.length > 0) matches[0].classList.add('active');
-                    },
-                    (status) => {
-                        if (status) this.uiManager.setStatus(status);
-                    }
-                );
-                btnMic.textContent = "🎙️ Listening...";
-                btnMic.style.background = "rgba(0,255,0,0.2)";
-                btnMic.classList.add('active');
+                this.uiManager.setStatus(this.visionManager.isReady ? 'Ready!' : 'Manual controls available');
+                return;
             }
+            this.voiceService.start(shape => {
+                this.sceneManager.setShape(shape);
+                document.querySelectorAll('.shape-btn').forEach(b => {
+                    b.classList.toggle('active', b.dataset.shape === shape);
+                });
+            }, status => this.uiManager.setStatus(status), state => {
+                button.textContent = state === 'listening' ? '🎙️ Listening…' : state === 'starting' ? '🎙️ Starting…' : '🎙️ Voice Off';
+                button.classList.toggle('active', state === 'listening');
+                button.setAttribute('aria-pressed', String(state === 'listening'));
+                button.style.background = state === 'listening' ? 'rgba(0,255,0,0.2)' : 'rgba(255,0,0,0.2)';
+            });
         });
     }
 
     async init() {
-        this.uiManager.setStatus("Loading AI & Vision...");
-        await this.visionManager.init((msg) => this.uiManager.setStatus(msg));
-
-        // Get verified backend
-        const backend = this.visionManager.aiService.backend;
-        this.uiManager.updateBackend(backend.toUpperCase());
-        this.uiManager.setStatus("Ready!");
-
-        this.animate(0);
+        this.uiManager.setStatus('Loading hand tracking…');
+        try {
+            const backend = await this.visionManager.init(message => {
+                if (!this.disposed) this.uiManager.setStatus(message);
+            });
+            if (this.disposed) return;
+            this.uiManager.updateBackend(backend);
+            this.uiManager.setStatus('Ready!');
+        } catch (error) {
+            if (this.disposed) return;
+            this.uiManager.updateBackend('Unavailable');
+            this.uiManager.setStatus(`Gestures unavailable: ${error.message}. Manual controls still work.`);
+        }
     }
 
     animate(timestamp) {
-        requestAnimationFrame(this.animate.bind(this));
-
-        const dt = timestamp - this.lastTime;
+        if (this.disposed) return;
+        this.animationId = requestAnimationFrame(this.animate);
+        const deltaSeconds = this.lastTime === null ? 1 / 60 : Math.min(Math.max((timestamp - this.lastTime) / 1000, 0), 0.1);
         this.lastTime = timestamp;
-
-        // FPS Calculation
+        this.lastFpsTime ??= timestamp;
         this.frameCount++;
-        if (timestamp - this.lastFpsTime >= 1000) {
-            this.uiManager.updateStats(this.frameCount);
+        const elapsed = timestamp - this.lastFpsTime;
+        if (elapsed >= 1000) {
+            this.uiManager.updateStats(Math.round(this.frameCount * 1000 / elapsed));
             this.frameCount = 0;
             this.lastFpsTime = timestamp;
         }
-
-        // Logic
-        const gestures = this.visionManager.detect();
-
-        // Reality AI / AI Director Mode
-        let proceduralPoints = null;
-        if (this.sceneManager.currentShape === 'reality') {
-            // Pass motion data to generator
-            proceduralPoints = this.realityService.scan(gestures.motion);
+        let gestures;
+        try {
+            gestures = this.visionManager.detect(timestamp);
+        } catch (error) {
+            this.visionManager.dispose();
+            gestures = this.visionManager.gestureData;
+            this.uiManager.updateBackend('Unavailable');
+            this.uiManager.setStatus(`Tracking stopped: ${error.message}. Manual controls still work.`);
         }
+        const points = this.sceneManager.currentShape === 'reality'
+            ? this.realityService.scan(gestures.motion, deltaSeconds) : null;
+        this.sceneManager.update(gestures, points, deltaSeconds);
+        this.uiManager.updateGesture(gestures);
+    }
 
-        this.sceneManager.update(gestures, proceduralPoints);
-
-        // Update UI with AI result
-        this.uiManager.updateGesture(gestures.gesture);
+    dispose() {
+        if (this.disposed) return;
+        this.disposed = true;
+        cancelAnimationFrame(this.animationId);
+        this.voiceService.dispose();
+        this.visionManager.dispose();
+        this.sceneManager.dispose();
     }
 }
 
-// Start App
-window.addEventListener('DOMContentLoaded', () => {
-    const app = new App();
-});
+window.addEventListener('DOMContentLoaded', () => new App());
