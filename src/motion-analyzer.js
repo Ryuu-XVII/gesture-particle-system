@@ -5,20 +5,28 @@ export class MotionAnalyzer {
         this.lastTime = 0;
     }
 
+    reset() {
+        this.history.length = 0;
+        this.energy = 0;
+    }
+
     analyze(landmarks, timestamp) {
         if (!landmarks || landmarks.length === 0) {
+            this.reset();
             return { energy: 0, speed: 0, shape: null };
         }
 
         // 1. Calculate Motion Metrics (Energy/Speed)
         // Average movement of all 21 points
         let totalSpeed = 0;
+        let elapsed = 0;
 
         if (this.history.length > 0) {
             const last = this.history[this.history.length - 1];
             const dt = (timestamp - last.time);
 
-            if (dt > 0) {
+            if (dt > 0 && dt < 250) {
+                elapsed = dt / 1000;
                 // For simplicity, take index 0 (Wrist) and 8 (Index Tip) movement
                 // Or average all. Let's average Wrist(0) and Index(8) and Pinky(20)
                 const indices = [0, 8, 20];
@@ -40,10 +48,12 @@ export class MotionAnalyzer {
                     const avgDist = distSum / indices.length;
                     // Speed = distance / time. 
                     // Raw distance is in 0..1 coordinates.
-                    totalSpeed = avgDist * 100; // Scale up
+                    totalSpeed = avgDist / elapsed;
                 }
             }
         }
+
+        if (elapsed === 0) this.energy = 0;
 
         // Update History
         this.history.push({ time: timestamp, landmarks: landmarks });
@@ -51,7 +61,10 @@ export class MotionAnalyzer {
 
         // Energy is smoothed speed
         // Returns 0.0 (Still) to 1.0 (Fast)
-        const energy = Math.min(totalSpeed, 1.0);
+        // Normalized image-space distance per second, smoothed by elapsed time.
+        const alpha = 1 - Math.exp(-elapsed / 0.08);
+        this.energy = (this.energy ?? 0) + (Math.min(totalSpeed, 1) - (this.energy ?? 0)) * alpha;
+        const energy = this.energy;
 
 
         // 2. Complex Shape Detection
@@ -102,6 +115,7 @@ export class MotionAnalyzer {
 
         return {
             energy: energy,
+            speed: totalSpeed,
             shape: complexShape
         };
     }
